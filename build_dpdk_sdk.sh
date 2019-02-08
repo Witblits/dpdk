@@ -2,7 +2,6 @@
 
 apt-get -y install gcc libnuma-dev make python
 ## download dpdk SDK
-cd
 wget http://fast.dpdk.org/rel/dpdk-18.08.tar.gz
 tar zvxf dpdk-18.08.tar.gz
 
