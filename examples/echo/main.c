@@ -66,6 +66,12 @@ static uint8_t port_ip_addr[RTE_MAX_ETHPORTS][4];
 /* mask of enabled ports */
 static uint32_t l2fwd_enabled_port_mask = 0;
 
+/* port_mode */
+static uint8_t port_mode[RTE_MAX_ETHPORTS];
+
+/* MTU */
+static uint16_t mtu[RTE_MAX_ETHPORTS];
+
 /* list of enabled ports */
 static uint32_t l2fwd_dst_ports[RTE_MAX_ETHPORTS];
 
@@ -100,7 +106,7 @@ static struct rte_eth_dev_tx_buffer *tx_buffer[RTE_MAX_ETHPORTS];
 static struct rte_eth_conf port_conf = {
 	.rxmode = {
 		.split_hdr_size = 0,
-		.offloads = DEV_RX_OFFLOAD_CRC_STRIP,
+	//	.offloads = DEV_RX_OFFLOAD_CRC_STRIP,
 	},
 	.txmode = {
 		.mq_mode = ETH_MQ_TX_NONE,
@@ -119,6 +125,9 @@ struct l2fwd_port_statistics {
 	uint64_t dropped_prev;
 	uint64_t tx_bytes;
 	uint64_t rx_bytes;
+	bool handle_icmp;
+	bool handle_arp;
+	bool handle_ip;
 } __rte_cache_aligned;
 struct l2fwd_port_statistics port_statistics[RTE_MAX_ETHPORTS];
 
@@ -158,8 +167,6 @@ print_stats(void)
         const char clr[] = { 27, '[', '2', 'J', '\0' };
         const char topLeft[] = { 27, '[', '1', ';', '1', 'H','\0' };
 
-	
-
                 /* Clear screen and move to top left */
         printf("%s%s", clr, topLeft);
 
@@ -171,8 +178,10 @@ print_stats(void)
                 /* skip disabled ports */
                 if ((l2fwd_enabled_port_mask & (1 << portid)) == 0)
                         continue;
-		printf("\nPORT %u  (%02X:%02X:%02X:%02X:%02X:%02X)",
-				portid,
+		printf("\nPORT %u", portid);
+		if(port_mode[portid]==0) printf("[S]"); else printf("[E]");
+
+		printf(" (%02X:%02X:%02X:%02X:%02X:%02X)",
 				port_eth_addr[portid].addr_bytes[0],
 				port_eth_addr[portid].addr_bytes[1],
 				port_eth_addr[portid].addr_bytes[2],
@@ -199,7 +208,22 @@ print_stats(void)
 				port_statistics[portid].rx-port_statistics[portid].rx_prev,
 				port_statistics[portid].tx-port_statistics[portid].tx_prev,
 			    port_statistics[portid].dropped-port_statistics[portid].dropped_prev);
-		
+	
+		NL	
+		if((port_statistics[portid].rx-port_statistics[portid].rx_prev)>0){
+                	printf(GREEN "APS: %u" , callback_numbers_port[portid].pkt_size/(port_statistics[portid].rx-port_statistics[portid].rx_prev)*2);
+		} else { printf(GREEN "APS: 0" ); }
+		NL
+
+		printf("Packet types: ");
+		if(port_statistics[portid].handle_arp) printf(" ARP");
+		if(port_statistics[portid].handle_icmp) printf(" ICMP");
+		if(port_statistics[portid].handle_ip) printf(" IP");
+		printf(RESET);
+		NL
+
+                callback_numbers_port[portid].pkt_size=0;
+
                 total_packets_dropped += port_statistics[portid].dropped;
                 total_packets_rx += port_statistics[portid].rx;
                 total_packets_tx += port_statistics[portid].tx;
@@ -212,12 +236,11 @@ print_stats(void)
 		port_statistics[portid].tx_prev=port_statistics[portid].tx;
 		port_statistics[portid].dropped_prev=port_statistics[portid].dropped;
 
-		NL
-		printf(GREEN "APS: %u" RESET, callback_numbers_port[portid].aps);
-
-
+		port_statistics[portid].handle_arp = false;
+		port_statistics[portid].handle_icmp = false;
+		port_statistics[portid].handle_ip = false;
         }
-        printf("\nAggregate statistics==========="
+        printf("Aggregate statistics==========="
 //                   "\nTotal packets received: %10"PRIu64
 //                   " | Total packets sent: %14"PRIu64
 //                   " | Total packets dropped: %11"PRIu64
@@ -269,14 +292,14 @@ calc_latency(uint16_t port __rte_unused, uint16_t qidx __rte_unused,
 
     callback_numbers_port[port].total_pkts += nb_pkts;
 
-    if (callback_numbers_port[port].total_pkts > (9ULL)) {
+    if (callback_numbers_port[port].total_pkts > (100ULL)) {
         //printf("Latency = %"PRIu64" cycles\n",
         //        latency_numbers.total_cycles / latency_numbers.total_pkts);
 
 		//printf("No of packets: %u", callback_numbers_port[port].total_pkts);
 		//NL
 
-		callback_numbers_port[port].aps=callback_numbers_port[port].pkt_size/10;
+		callback_numbers_port[port].aps=callback_numbers_port[port].pkt_size;
 		//printf("APS on port %u: %u", port , callback_numbers_port[port].aps);
 		//NL
 
@@ -335,9 +358,12 @@ handle_rx(struct rte_mbuf *pkt, unsigned portid)
 		} 
 		NL*/
 
-		if(memcmp(&hex[38], &port_ip_addr[portid][0], sizeof(uint8_t)*4) == 0){
+		/* check if dst MAC matches port's local */
+		if(memcmp(&hex[38], &port_ip_addr[portid][0], sizeof(uint8_t)*4) == 0){ 
 			//printf("MATCH\n");
 		}else return;
+
+		port_statistics[portid].handle_arp = true;
 
 		/*printf("tell: ");
 		for(int i=28; i<32; i++){
@@ -360,20 +386,21 @@ handle_rx(struct rte_mbuf *pkt, unsigned portid)
 		buffer = tx_buffer[portid];
 		sent = rte_eth_tx_buffer(portid, 0, buffer, pkt);
 		if (sent)
-		port_statistics[portid].tx += sent;	
+		port_statistics[portid].tx += sent*2;	
 
 		return;	
 
-	} else
+	}
 	if (ethhdr->ether_type == 0x08){          /*                  IP                    */
 
 		iphdr = (struct ipv4_hdr *)(ethhdr + 1);
 
 		if(hex[23] == 0x01){			/*			ICMP			*/
 			//printf("IP" BLUE " PROTO ->" RESET " ICMP ");
-
 			if(hex[34] == 0x08){	// REQUEST
 				//printf(" REQ");
+
+				port_statistics[portid].handle_icmp = true;
 
 				//swap eth/l2 addresses
 				memcpy(&ethhdr->d_addr.addr_bytes[0], &ethhdr->s_addr.addr_bytes[0], 6);
@@ -395,7 +422,13 @@ handle_rx(struct rte_mbuf *pkt, unsigned portid)
 			
 		} else { 		/*		NOT ICMP		*/
 
+			port_statistics[portid].handle_ip = true;
+
 			/*	bounce traffic	*/
+				if(port_mode[portid] == 0){
+				rte_pktmbuf_free(pkt);
+				return;
+			}
 
 			//swap eth/l2 addresses
 			memcpy(&ethhdr->d_addr.addr_bytes[0], &ethhdr->s_addr.addr_bytes[0], 6);
@@ -420,7 +453,7 @@ handle_rx(struct rte_mbuf *pkt, unsigned portid)
 	buffer = tx_buffer[portid];
 	sent = rte_eth_tx_buffer(portid, 0, buffer, pkt);
 	if (sent)
-		port_statistics[portid].tx += sent;
+		port_statistics[portid].tx += sent*2;
 
 	}
 
@@ -485,7 +518,7 @@ default_worker_lcore_loop(void)
 
 				sent = rte_eth_tx_buffer_flush(portid, 0, buffer);
 				if (sent)
-					port_statistics[portid].tx += sent;
+					port_statistics[portid].tx += sent*2;
 
 			}
 			prev_tsc = cur_tsc;
@@ -500,14 +533,18 @@ default_worker_lcore_loop(void)
  			nb_rx = rte_eth_rx_burst(portid, 0,
  						 pkts_burst, MAX_PKT_BURST);
 
- 			port_statistics[portid].rx += nb_rx;
+ 			port_statistics[portid].rx += nb_rx*2;
 
- 			for (j = 0; j < nb_rx; j++) {
- 				m = pkts_burst[j];
- 				rte_prefetch0(rte_pktmbuf_mtod(m, void *));
- 				handle_rx(m, portid);
+		/*	if(port_mode[portid] == 0){
+				for (j = 0; j < nb_rx; j++) rte_pktmbuf_free(pkts_burst[j]);
+			} else*/
+				for (j = 0; j < nb_rx; j++)
+				   {
+ 					m = pkts_burst[j];
+	 				rte_prefetch0(rte_pktmbuf_mtod(m, void *));
+					handle_rx(m, portid);
+				   }
  			}
-		}
 
 	}
 }
@@ -898,7 +935,7 @@ main(int argc, char **argv)
 	if (l2fwd_pktmbuf_pool == NULL)
 		rte_exit(EXIT_FAILURE, "Cannot init mbuf pool\n");
 
-	/* Initialise each port */
+	/* INITIALIZE each port */
 	RTE_ETH_FOREACH_DEV(portid) {
 		struct rte_eth_rxconf rxq_conf;
 		struct rte_eth_txconf txq_conf;
@@ -923,6 +960,14 @@ main(int argc, char **argv)
 		if (ret < 0)
 			rte_exit(EXIT_FAILURE, "Cannot configure device: err=%d, port=%u\n",
 				  ret, portid);
+
+		/* Configure MTU  */
+		rte_eth_dev_get_mtu(portid, &mtu[portid]);
+		printf("current MTU = %u \n",mtu[portid]);
+		//int rte_eth_dev_set_mtu(uint16_t port_id, uint16_t mtu);
+		rte_eth_dev_set_mtu(portid, 9000);
+		rte_eth_dev_get_mtu(portid, &mtu[portid]);
+		printf("new MTU = %u \n",mtu[portid]);
 
 		ret = rte_eth_dev_adjust_nb_rx_tx_desc(portid, &nb_rxd,
 						       &nb_txd);
@@ -986,7 +1031,7 @@ main(int argc, char **argv)
 
     /* Add the callbacks for RX and TX.*/
     //rte_eth_add_rx_callback(portid, 0, add_timestamps, NULL);
-    rte_eth_add_tx_callback(portid, 0, calc_latency, NULL);
+    //rte_eth_add_tx_callback(portid, 0, calc_latency, NULL);
 
 		printf(GREEN "Port %u, MAC address: %02X:%02X:%02X:%02X:%02X:%02X\n\n" RESET,
 				portid,
@@ -1009,6 +1054,11 @@ main(int argc, char **argv)
 	check_all_ports_link_status(l2fwd_enabled_port_mask);
 
 	ret = 0;
+
+	/*	set port mode		*/
+	for(int i = 0; i<4; i++){
+		port_mode[i] = 0;
+	}
 
 	/*	set default IPs 	*/	
 
