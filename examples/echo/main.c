@@ -90,6 +90,10 @@ static int slow_mode_enabled = 0;
 #define RED   "\x1B[31m" /* Red */
 #define BLUE   "\x1B[34m" /* BLUE */
 
+#define MAGENTA "\033[35m"      /* Magenta */
+#define CYAN    "\033[36m"      /* Cyan */
+#define YELLOW  "\033[33m"      /* Yellow */
+
 #define NL printf("\n");
 
 int alarm_stop = 0;
@@ -189,7 +193,7 @@ print_stats(void)
 				port_eth_addr[portid].addr_bytes[4],
 				port_eth_addr[portid].addr_bytes[5]);
 
-		printf(" IP %u.%u.%u.%u", 
+		printf(" IP %u.%u.%u.%u",
 		port_ip_addr[portid][0],
 		port_ip_addr[portid][1],
 		port_ip_addr[portid][2],
@@ -208,8 +212,8 @@ print_stats(void)
 				port_statistics[portid].rx-port_statistics[portid].rx_prev,
 				port_statistics[portid].tx-port_statistics[portid].tx_prev,
 			    port_statistics[portid].dropped-port_statistics[portid].dropped_prev);
-	
-		NL	
+
+		NL
 		if((port_statistics[portid].rx-port_statistics[portid].rx_prev)>0){
                 	printf(GREEN "APS: %u" , callback_numbers_port[portid].pkt_size/(port_statistics[portid].rx-port_statistics[portid].rx_prev)*2);
 		} else { printf(GREEN "APS: 0" ); }
@@ -324,42 +328,66 @@ handle_rx(struct rte_mbuf *pkt, unsigned portid)
 	uint16_t cksum;
 	int ip_dst;
 
+	FILE *dump_file;
+
+	dump_file = fopen("dump.txt", "a");
+	fprintf(dump_file, "\n-----------------------\n");
+
+	rte_pktmbuf_dump(dump_file, pkt, 3000);
+	fclose(dump_file);
+
+
 	ethhdr = rte_pktmbuf_mtod(pkt, struct ether_hdr *);
-	
-	//printf(GREEN "Packet received on port_%u:" RESET, portid);
 
-	//NL
+	printf(GREEN "Packet received on port_%u:" RESET, portid);
 
-	//printf("pkt_len %u, data_len %u \n", pkt->pkt_len, pkt->data_len);
+	NL
+
+	printf("pkt_len %u, data_len %u \n", pkt->pkt_len, pkt->data_len);
 	callback_numbers_port[portid].pkt_size += pkt->pkt_len;
 
+	// printf("Andreas prints the ethhdr (mbuf data)\n");
+	// printf(RED "mbuf size = %u [bytes]" RESET, sizeof(ethhdr));
+	// for(int i=0; i<pkt->pkt_len; i++){
+	// 	printf("%02x ", ethhdr[i]);
+	// }
 
 	hex = rte_pktmbuf_mtod(pkt, uint8_t*);
 
-	/*
-	printf("Buffer hex: \n");
-	for(int i=0; i<6; i++){
+	printf("Andreas prints the hex (mbuf data)\n");
+	printf(RED "mbuf size = %u [bytes]\n" RESET, sizeof(hex));
+	for(int i=0; i<pkt->pkt_len; i++){
 		printf("%02x ", hex[i]);
-	} printf(BLUE "L2DST " RESET);
-	for(int i=6; i<12; i++){
-		printf("%02x ", hex[i]);
-	} printf(BLUE "L2SRC " RESET);
-	for(int i=12; i<14; i++){
-		printf("%02x ", hex[i]);
-	} printf(BLUE "TYP -> " RESET);*/
+	}
+
+	printf("\nASCII Value\n");
+	for(int i=42; i<pkt->pkt_len; i++){
+		printf("%c", hex[i]);
+	}
+
+	// printf("\nBuffer hex: \n");
+	// for(int i=0; i<6; i++){
+	// 	printf("%02x ", hex[i]);
+	// } printf(BLUE "L2DST " RESET);
+	// for(int i=6; i<12; i++){
+	// 	printf("%02x ", hex[i]);
+	// } printf(BLUE "L2SRC " RESET);
+	// for(int i=12; i<14; i++){
+	// 	printf("%02x ", hex[i]);
+	// } printf(BLUE "TYP -> " RESET);
 
 	//check packet type
 	if (ethhdr->ether_type == 0x0608){     /*           ARP            */
-		//printf("ARP\n");
+		printf("\nARP\n");
 
 		/*printf("who-has: ");
 		for(int i=38; i<42; i++){
 			printf("%u ", hex[i]);
-		} 
+		}
 		NL*/
 
 		/* check if dst MAC matches port's local */
-		if(memcmp(&hex[38], &port_ip_addr[portid][0], sizeof(uint8_t)*4) == 0){ 
+		if(memcmp(&hex[38], &port_ip_addr[portid][0], sizeof(uint8_t)*4) == 0){
 			//printf("MATCH\n");
 		}else return;
 
@@ -386,13 +414,13 @@ handle_rx(struct rte_mbuf *pkt, unsigned portid)
 		buffer = tx_buffer[portid];
 		sent = rte_eth_tx_buffer(portid, 0, buffer, pkt);
 		if (sent)
-		port_statistics[portid].tx += sent*2;	
+		port_statistics[portid].tx += sent*2;
 
-		return;	
+		return;
 
 	}
 	if (ethhdr->ether_type == 0x08){          /*                  IP                    */
-
+		printf("\nIPv4\n");
 		iphdr = (struct ipv4_hdr *)(ethhdr + 1);
 
 		if(hex[23] == 0x01){			/*			ICMP			*/
@@ -414,12 +442,12 @@ handle_rx(struct rte_mbuf *pkt, unsigned portid)
 				ip_dst = iphdr->dst_addr;
 				iphdr->dst_addr = iphdr->src_addr;
 				iphdr->src_addr = ip_dst;
-			} 
+			}
 			else if(hex[34] == 0x00){	// RESPONSE
 				//printf(" RESP");
-			} 
+			}
 
-			
+
 		} else { 		/*		NOT ICMP		*/
 
 			port_statistics[portid].handle_ip = true;
@@ -441,7 +469,7 @@ handle_rx(struct rte_mbuf *pkt, unsigned portid)
 			iphdr->src_addr = ip_dst;
 
 		}
-	
+
 		// calculate cksum
 		iphdr->hdr_checksum = 0;
 		cksum = rte_ipv4_cksum(iphdr);
@@ -467,7 +495,7 @@ static void
 default_worker_lcore_loop(void)
 {
 	struct rte_mbuf *pkts_burst[MAX_PKT_BURST];
-	struct rte_mbuf *m;
+	struct rte_mbuf *m, *extra_var1, *extra_var2;
 	int sent;
 	unsigned lcore_id;
 	uint64_t prev_tsc, diff_tsc, cur_tsc, timer_tsc;
@@ -501,7 +529,7 @@ default_worker_lcore_loop(void)
  if (slow_mode_enabled == 1){
                         usleep(1000);
                 }
-				
+
 		cur_tsc = rte_rdtsc();
 
 		/*
@@ -522,7 +550,7 @@ default_worker_lcore_loop(void)
 
 			}
 			prev_tsc = cur_tsc;
-		}  
+		}
 
 		/*
 		 * Read packet from RX queues
@@ -538,12 +566,78 @@ default_worker_lcore_loop(void)
 		/*	if(port_mode[portid] == 0){
 				for (j = 0; j < nb_rx; j++) rte_pktmbuf_free(pkts_burst[j]);
 			} else*/
-				for (j = 0; j < nb_rx; j++)
-				   {
- 					m = pkts_burst[j];
-	 				rte_prefetch0(rte_pktmbuf_mtod(m, void *));
-					handle_rx(m, portid);
-				   }
+
+			if(nb_rx > 0){
+				printf(BLUE "\nNew packets received (%02d)\n" RESET,nb_rx);
+			}
+
+			for (j = 0; j < nb_rx; j++)
+				{
+				printf(MAGENTA "Packet %02d\n" RESET,j); //Debug shit
+				m = pkts_burst[j];
+				printf("Mbuf next\n");
+				printf("%u\n",m->next);
+				printf("%x\n",m->next);
+				printf("Mbuf pkt_len\n");
+				printf("%u\n",m->pkt_len); /**< Total pkt len: sum of all segments. */
+				printf("Mbuf timestamp\n");
+				printf("%u\n",m->timestamp);
+				printf("%s\n",m->timestamp);
+				printf("%x\n",m->timestamp);
+				printf("Mbuf packet_type\n");
+				printf("%u\n",m->packet_type);
+				printf("%x\n",m->packet_type);
+				printf("Mbuf nb_segs\n");
+				printf("%u\n",m->nb_segs);
+				printf("Mbuf buf_iova\n");
+				printf("%u\n",(uint64_t)m->buf_iova);
+				printf("%x\n",(uint64_t)m->buf_iova);
+				printf("%p\n",(uint64_t)m->buf_iova);
+				printf("Mbuf buf_addr\n");
+				printf("%u\n",m->buf_addr);
+				printf("%x\n",m->buf_addr);
+				printf("%p\n",m->buf_addr);
+				printf("Mbuf struct\n");
+				printf("%u\n",m);
+				printf("%x\n",m);
+				printf("%p\n",m);
+				printf("Mbuf pool\n");
+				printf("%x\n",m->pool);
+				printf("%s\n",m->pool);
+				printf("Mbuf seqn\n");
+				printf("%u\n",m->seqn);
+				printf("%x\n",m->seqn);
+				printf("Mbuf shinfo\n");
+				printf("%u\n",m->shinfo);
+				printf("%x\n",m->shinfo);
+				printf("Mbuf refcnt\n");
+				uint16_t cnt_ja = rte_mbuf_refcnt_read(m);
+				printf("%u\n",cnt_ja);
+				printf("%x\n",cnt_ja);
+				printf("Mempool cache_size\n");
+				printf("%u\n",m->pool->cache_size);
+				printf("%x\n",m->pool->cache_size);
+				printf("Mempool elt_size\n");
+				printf("%u\n",m->pool->elt_size);
+				printf("%x\n",m->pool->elt_size);
+				printf("Mempool size\n");
+				printf("%u\n",m->pool->size);
+				printf("%x\n",m->pool->size);
+				printf("Mempool nb_mem_chunks\n");
+				printf("%u\n",m->pool->nb_mem_chunks); /**< Number of memory chunks */
+				printf("%x\n",m->pool->nb_mem_chunks);
+				printf("Mempool name\n");
+				printf("%x\n",m->pool->name);
+				printf("%s\n",m->pool->name);
+				printf("Mempool mem_list\n");
+				printf("%u\n",m->pool->mem_list);
+				printf("%x\n",m->pool->mem_list);
+				printf("Mempool populated_size\n");
+				printf("%u\n",m->pool->populated_size);
+				printf("%x\n",m->pool->populated_size);
+				rte_prefetch0(rte_pktmbuf_mtod(m, void *));
+				handle_rx(m, portid);
+				}
  			}
 
 	}
@@ -556,7 +650,7 @@ void on_alarm(int signal)
 	else ualarm(alarm_period,alarm_period);
 
 	//printf("\nTIME\n");
-	print_stats();
+	// print_stats();
 
 }
 
@@ -565,14 +659,14 @@ void on_alarm(int signal)
 static void
 default_master_lcore_loop(void)
 {
-	print_stats();
+	// print_stats();
 
 	signal(SIGALRM, on_alarm);
 	ualarm(alarm_period,alarm_period);
 	//for(;;){
-		
+
 	//}
-		
+
 
 }
 
@@ -928,10 +1022,20 @@ main(int argc, char **argv)
 	nb_mbufs = RTE_MAX(nb_ports * (nb_rxd + nb_txd + MAX_PKT_BURST +
 		nb_lcores * MEMPOOL_CACHE_SIZE), 8192U);
 
-	/* create the mbuf pool */
-	l2fwd_pktmbuf_pool = rte_pktmbuf_pool_create("mbuf_pool", nb_mbufs,
-		MEMPOOL_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE,
+	printf("nb_mbufs\n");
+	printf("%u\n",nb_mbufs);
+	printf("%x\n",nb_mbufs);
+
+	/* create the mbuf pool (using my own default buf size)*/
+	l2fwd_pktmbuf_pool = rte_pktmbuf_pool_create("mbuf_pool", 67840,
+		MEMPOOL_CACHE_SIZE, 0, 98304,
 		rte_socket_id());
+
+	// /* create the mbuf pool */
+	// l2fwd_pktmbuf_pool = rte_pktmbuf_pool_create("mbuf_pool", nb_mbufs,
+	// 	MEMPOOL_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE,
+	// 	rte_socket_id());
+
 	if (l2fwd_pktmbuf_pool == NULL)
 		rte_exit(EXIT_FAILURE, "Cannot init mbuf pool\n");
 
@@ -966,6 +1070,7 @@ main(int argc, char **argv)
 		printf("current MTU = %u \n",mtu[portid]);
 		//int rte_eth_dev_set_mtu(uint16_t port_id, uint16_t mtu);
 		rte_eth_dev_set_mtu(portid, 9000);
+		// rte_eth_dev_set_mtu(portid, 100);
 		rte_eth_dev_get_mtu(portid, &mtu[portid]);
 		printf("new MTU = %u \n",mtu[portid]);
 
@@ -1060,10 +1165,10 @@ main(int argc, char **argv)
 		port_mode[i] = 0;
 	}
 
-	/*	set default IPs 	*/	
+	/*	set default IPs 	*/
 
-	memcpy(&port_ip_addr[0], &(uint8_t[]){0,0,0,0}, 4);
-	memcpy(&port_ip_addr[1], &(uint8_t[]){0,0,0,0}, 4);
+	memcpy(&port_ip_addr[0], &(uint8_t[]){10,0,0,2}, 4);
+	memcpy(&port_ip_addr[1], &(uint8_t[]){10,0,0,3}, 4);
 
 	/* launch per-lcore init on every lcore */
 	rte_eal_mp_remote_launch(launch_lcore_thread, NULL, CALL_MASTER);
